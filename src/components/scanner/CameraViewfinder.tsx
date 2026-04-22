@@ -25,6 +25,27 @@ function cleanOcrText(raw: string): string {
     .trim();
 }
 
+/**
+ * Remove OCR noise words from a string, keeping only words that are
+ * plausibly part of a real card name:
+ * - Drop single characters ("N", "a")
+ * - Drop short all-uppercase blobs ("EZ", "AT") — usually mis-read symbols
+ * - Drop pure-digit tokens
+ *
+ * "N oriq Loremag EZ a" → "oriq Loremag"
+ */
+function filterNoise(text: string): string {
+  return text
+    .split(/\s+/)
+    .filter((w) => {
+      if (w.length <= 1) return false;
+      if (w.length <= 3 && w === w.toUpperCase() && /^[A-Z]+$/.test(w)) return false;
+      if (/^\d+$/.test(w)) return false;
+      return true;
+    })
+    .join(" ");
+}
+
 /** Try Scryfall autocomplete for a query, return the top match or null. */
 async function tryAutocomplete(q: string): Promise<ScryfallCard | null> {
   if (q.length < 2) return null;
@@ -39,29 +60,46 @@ async function tryAutocomplete(q: string): Promise<ScryfallCard | null> {
 /**
  * Multi-strategy lookup — tries in order until something matches:
  *
- * 1. Fuzzy:              "evolving wil"   → Scryfall fuzzy (handles typos)
- * 2. Autocomplete full:  "evolving wil"   → autocomplete → "Evolving Wilds"
- * 3. No-space variant:   "evolvingwil"    → handles OCR that merges words
- * 4. Per-word fallback:  "evolving", "wil" (longest first) → autocomplete
- *    Catches cases where OCR only read one word of a multi-word name.
+ * 1. Fuzzy on full text          "N oriq Loremag EZ a" → fuzzy
+ * 2. Autocomplete on full text   "N oriq Loremag EZ a" → autocomplete
+ * 3. Noise-filtered joined       "oriq Loremag"        → autocomplete ← key fix
+ * 4. Noise-filtered per-word     "Loremag", "oriq"     → autocomplete each
+ * 5. No-space variant            "NoriqLoremagEZa"     → handles merged words
+ * 6. Raw per-word (longest first) as final fallback
  */
 async function lookupCard(text: string): Promise<ScryfallCard | null> {
-  // 1. Fuzzy
+  // 1. Fuzzy on full text
   const fuzzy = await fetch(`/api/scryfall/named?fuzzy=${encodeURIComponent(text)}`);
   if (fuzzy.ok) return fuzzy.json();
 
-  // 2. Autocomplete on full text (best for truncated words like "wil" → "Wilds")
+  // 2. Autocomplete on full text
   const fromFull = await tryAutocomplete(text);
   if (fromFull) return fromFull;
 
-  // 3. No-space variant (handles OCR joining words: "LightningBolt")
+  // 3 & 4. Filter noise first, then try joined and per-word
+  const filtered = filterNoise(text);
+  if (filtered && filtered !== text) {
+    // 3. Noise-filtered joined: "oriq Loremag" → "Oriq Loremage"
+    const fromFiltered = await tryAutocomplete(filtered);
+    if (fromFiltered) return fromFiltered;
+
+    // 4. Noise-filtered per-word, longest first
+    const filteredWords = filtered.split(/\s+/).filter((w) => w.length >= 3);
+    filteredWords.sort((a, b) => b.length - a.length);
+    for (const word of filteredWords) {
+      const fromWord = await tryAutocomplete(word);
+      if (fromWord) return fromWord;
+    }
+  }
+
+  // 5. No-space variant (handles OCR merging words: "LightningBolt")
   const noSpace = text.replace(/\s+/g, "");
   if (noSpace !== text) {
     const fromNoSpace = await tryAutocomplete(noSpace);
     if (fromNoSpace) return fromNoSpace;
   }
 
-  // 4. Per-word fallback — try each word, longest first
+  // 6. Raw per-word fallback
   const words = text.split(/\s+/).filter((w) => w.length >= 3);
   words.sort((a, b) => b.length - a.length);
   for (const word of words) {
