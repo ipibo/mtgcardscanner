@@ -7,42 +7,108 @@ import { CROP } from "@/lib/ocr/cropConstants";
 import type { ScryfallCard } from "@/lib/scryfall/types";
 
 interface CameraViewfinderProps {
-  onCardFound: (card: ScryfallCard) => void;
+  /** Called when a card is identified with high confidence.
+   *  The second argument is a callback to resume scanning. */
+  onCardFound: (card: ScryfallCard, resume: () => void) => void;
 }
 
 type ScanState = "warming" | "scanning" | "found" | "paused";
 
-const CONFIDENCE_THRESHOLD = 80; // auto-confirm above this
-const SCAN_INTERVAL_MS = 1500;   // ms between OCR attempts
+const CONFIDENCE_THRESHOLD = 80;
+const SCAN_INTERVAL_MS     = 1500;
 
-/** See CameraViewfinder for the object-cover math explanation. */
+/**
+ * Strip OCR noise from the start/end of a string and normalise whitespace.
+ * Tesseract often prepends punctuation like ",," or "'" before the first
+ * real character, and sometimes cuts the last word short.
+ */
+function cleanOcrText(raw: string): string {
+  return raw
+    .replace(/^[^a-zA-Z]+/, "")   // strip leading non-alpha (,, ' - etc.)
+    .replace(/[^a-zA-Z]+$/, "")   // strip trailing non-alpha
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Look up a card by OCR text using two strategies:
+ * 1. Scryfall fuzzy — handles typos well
+ * 2. Scryfall autocomplete → exact — handles truncated words well
+ *    e.g. "evolving wil" → autocomplete → "Evolving Wilds" → exact fetch
+ *
+ * Returns the card or null if neither strategy matched.
+ */
+async function lookupCard(text: string): Promise<ScryfallCard | null> {
+  // Strategy 1: fuzzy lookup
+  const fuzzyRes = await fetch(
+    `/api/scryfall/named?fuzzy=${encodeURIComponent(text)}`
+  );
+  if (fuzzyRes.ok) return fuzzyRes.json();
+
+  // Strategy 2: autocomplete → take first suggestion → exact lookup
+  const acRes = await fetch(
+    `/api/scryfall/autocomplete?q=${encodeURIComponent(text)}`
+  );
+  if (!acRes.ok) return null;
+  const { data }: { data: string[] } = await acRes.json();
+  if (!data || data.length === 0) return null;
+
+  const exactRes = await fetch(
+    `/api/scryfall/named?exact=${encodeURIComponent(data[0])}`
+  );
+  return exactRes.ok ? exactRes.json() : null;
+}
+
+/**
+ * Map the crop rectangle from video-pixel space to CSS-pixel space,
+ * accounting for object-cover scaling.
+ *
+ * With object-cover one axis fills the container exactly while the
+ * other overflows and is clipped. On a typical phone (16:9 camera in
+ * a 4:3 container) the video is wider than the container, so the
+ * horizontal crop coordinates map to values outside [0, containerW].
+ * We clamp to the container bounds — the guide is still accurate
+ * vertically, and horizontally it signals "full width" which is
+ * correct (the 5 % margin just trims the very edge of the frame).
+ */
 function computeGuideBox(
   containerW: number,
   containerH: number,
   videoW: number,
-  videoH: number
+  videoH: number,
 ) {
   if (!containerW || !containerH || !videoW || !videoH)
     return { left: 0, top: 0, width: 0, height: 0 };
 
-  const videoAspect = videoW / videoH;
+  const videoAspect     = videoW / videoH;
   const containerAspect = containerW / containerH;
 
   let scale: number, offsetX = 0, offsetY = 0;
   if (videoAspect > containerAspect) {
-    scale = containerH / videoH;
+    // Video wider → height fills container, sides overflow/clip
+    scale   = containerH / videoH;
     offsetX = (videoW * scale - containerW) / 2;
   } else {
-    scale = containerW / videoW;
+    // Video taller → width fills container, top/bottom overflow/clip
+    scale   = containerW / videoW;
     offsetY = (videoH * scale - containerH) / 2;
   }
 
-  return {
-    left:   videoW * CROP.marginX              * scale - offsetX,
-    top:    videoH * CROP.top                  * scale - offsetY,
-    width:  videoW * (1 - CROP.marginX * 2)   * scale,
-    height: videoH * CROP.height               * scale,
-  };
+  // Map crop rect to CSS pixels
+  let left   = videoW * CROP.marginX              * scale - offsetX;
+  let top    = videoH * CROP.top                  * scale - offsetY;
+  let width  = videoW * (1 - CROP.marginX * 2)   * scale;
+  let height = videoH * CROP.height               * scale;
+
+  // Clamp horizontally — the visible camera frame is always inside the
+  // crop zone, so spanning the full container width is the right hint.
+  const right = left + width;
+  if (left < 0 || right > containerW) {
+    left  = 0;
+    width = containerW;
+  }
+
+  return { left, top, width, height };
 }
 
 export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
@@ -56,11 +122,10 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
   const [liveText, setLiveText]     = useState("");
   const [confidence, setConfidence] = useState(0);
 
-  // Scanning loop control
-  const scanningRef  = useRef(false);  // true while the loop should keep running
-  const busyRef      = useRef(false);  // true while an OCR call is in-flight
+  const scanningRef = useRef(false);
+  const busyRef     = useRef(false);
 
-  // ── Guide box recalculation ──────────────────────────────────────────────
+  // ── Guide box ────────────────────────────────────────────────────────────
   const recalcGuide = useCallback(() => {
     const v = videoRef.current;
     const c = containerRef.current;
@@ -84,11 +149,17 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     return () => ro.disconnect();
   }, [recalcGuide]);
 
-  // ── OCR scan loop ────────────────────────────────────────────────────────
-  const runOnce = useCallback(async () => {
-    if (busyRef.current || !videoRef.current) return;
-    if (!scanningRef.current) return;
+  // ── Resume scanning (called by parent after user dismisses card sheet) ──
+  const resumeScanning = useCallback(() => {
+    setLiveText("");
+    setConfidence(0);
+    setPreviewUrl(null);
+    setScanState("scanning");
+  }, []);
 
+  // ── OCR loop ─────────────────────────────────────────────────────────────
+  const runOnce = useCallback(async () => {
+    if (busyRef.current || !videoRef.current || !scanningRef.current) return;
     busyRef.current = true;
     try {
       const dataUrl = captureAndCrop(videoRef.current);
@@ -97,24 +168,21 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
       const { recognizeText } = await import("@/lib/ocr/worker");
       const { text, confidence: conf } = await recognizeText(dataUrl);
 
-      if (!scanningRef.current) return; // was paused while OCR ran
+      if (!scanningRef.current) return;
 
-      setLiveText(text);
+      const cleaned = cleanOcrText(text);
+      setLiveText(cleaned);
       setConfidence(conf);
 
-      if (conf >= CONFIDENCE_THRESHOLD && text.length >= 2) {
-        // High enough — look it up
+      if (conf >= CONFIDENCE_THRESHOLD && cleaned.length >= 2) {
         scanningRef.current = false;
         setScanState("found");
 
-        const res = await fetch(
-          `/api/scryfall/named?fuzzy=${encodeURIComponent(text)}`
-        );
-        if (res.ok) {
-          const card: ScryfallCard = await res.json();
-          onCardFound(card);
+        const card = await lookupCard(cleaned);
+        if (card) {
+          onCardFound(card, resumeScanning);
         } else {
-          // Good OCR confidence but no Scryfall match — resume scanning
+          // Both strategies failed — resume scanning
           scanningRef.current = true;
           setScanState("scanning");
         }
@@ -122,36 +190,23 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     } finally {
       busyRef.current = false;
     }
-  }, [onCardFound]);
+  }, [onCardFound, resumeScanning]);
 
-  // Interval driver
   useEffect(() => {
     if (scanState !== "scanning") return;
-
     scanningRef.current = true;
-    runOnce(); // fire immediately on start
-
+    runOnce();
     const id = setInterval(() => {
       if (scanningRef.current && !busyRef.current) runOnce();
     }, SCAN_INTERVAL_MS);
-
-    return () => {
-      clearInterval(id);
-    };
+    return () => clearInterval(id);
   }, [scanState, runOnce]);
 
   // ── Camera startup ───────────────────────────────────────────────────────
   useEffect(() => {
-    setScanState("warming");
-    setLiveText("");
-    setConfidence(0);
-
     import("@/lib/ocr/worker")
       .then(({ getOcrWorker }) => getOcrWorker())
-      .then(() => {
-        if (camState === "active") setScanState("scanning");
-      });
-
+      .then(() => { if (camState === "active") setScanState("scanning"); });
     startCamera();
     return () => {
       scanningRef.current = false;
@@ -160,32 +215,16 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Start scanning once camera comes up
   useEffect(() => {
-    if (camState === "active" && scanState === "warming") {
-      setScanState("scanning");
-    }
+    if (camState === "active" && scanState === "warming") setScanState("scanning");
   }, [camState, scanState]);
 
-  const resumeScanning = () => {
-    setLiveText("");
-    setConfidence(0);
-    setPreviewUrl(null);
-    setScanState("scanning");
-  };
+  const pauseScanning = () => { scanningRef.current = false; setScanState("paused"); };
 
-  const pauseScanning = () => {
-    scanningRef.current = false;
-    setScanState("paused");
-  };
-
-  // Confidence bar colour
   const barColor =
-    confidence >= CONFIDENCE_THRESHOLD
-      ? "bg-emerald-500"
-      : confidence >= 50
-      ? "bg-yellow-500"
-      : "bg-red-500";
+    confidence >= CONFIDENCE_THRESHOLD ? "bg-emerald-500"
+    : confidence >= 50                 ? "bg-yellow-500"
+    :                                    "bg-red-500";
 
   const guideVisible = guide.width > 0;
 
@@ -204,7 +243,7 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
           className="h-full w-full object-cover"
         />
 
-        {/* Precise guide box — computed from actual video dimensions */}
+        {/* Guide box — position computed from real video dimensions */}
         {guideVisible && (
           <div
             className="pointer-events-none absolute"
@@ -212,47 +251,51 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
           >
             <div
               className={`absolute inset-0 rounded border-2 transition-colors duration-300 ${
-                scanState === "found"
-                  ? "border-emerald-400 bg-emerald-400/20"
-                  : scanState === "paused"
-                  ? "border-zinc-400/60 bg-transparent"
-                  : "border-yellow-400/90 bg-yellow-400/10"
+                scanState === "found"  ? "border-emerald-400 bg-emerald-400/20"
+                : scanState === "paused" ? "border-zinc-500/60"
+                :                          "border-yellow-400/90 bg-yellow-400/10"
               }`}
             />
+            {/* Label — inside the box at the bottom so it can't overflow the container */}
             <p
-              className="absolute left-0 right-0 text-center font-semibold drop-shadow-md"
-              style={{ top: "100%", marginTop: 4, fontSize: 11,
-                color: scanState === "found" ? "#34d399" : scanState === "paused" ? "#a1a1aa" : "#fde68a" }}
+              className="absolute bottom-1 left-0 right-0 text-center font-semibold drop-shadow-md text-[10px]"
+              style={{
+                color: scanState === "found"   ? "#34d399"
+                     : scanState === "paused"  ? "#a1a1aa"
+                     :                          "#fde68a",
+              }}
             >
               {scanState === "paused" ? "Paused" : "Align card name here"}
             </p>
           </div>
         )}
 
-        {/* Scanning pulse indicator */}
-        {scanState === "scanning" && (
-          <div className="absolute top-2 right-2 flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1">
-            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-white text-xs font-medium">Scanning</span>
-          </div>
-        )}
-        {scanState === "found" && (
-          <div className="absolute top-2 right-2 flex items-center gap-1.5 rounded-full bg-emerald-900/80 px-2 py-1">
-            <span className="text-emerald-300 text-xs font-medium">✓ Found</span>
-          </div>
-        )}
+        {/* Status badge */}
+        <div className="absolute top-2 right-2">
+          {scanState === "scanning" && (
+            <div className="flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1">
+              <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-white text-xs font-medium">Scanning</span>
+            </div>
+          )}
+          {scanState === "found" && (
+            <div className="flex items-center gap-1.5 rounded-full bg-emerald-900/80 px-2 py-1">
+              <span className="text-emerald-300 text-xs font-medium">✓ Found</span>
+            </div>
+          )}
+        </div>
 
         {camState === "denied" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-4 text-center text-sm text-white">
             Camera permission denied. Allow camera access in your browser settings, then reload.
           </div>
         )}
-        {camState === "error" && (
+        {(camState === "error" || camState === "idle") && scanState === "warming" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-4 text-center text-sm text-white">
             Camera unavailable. Use the search below instead.
           </div>
         )}
-        {scanState === "warming" && (
+        {scanState === "warming" && camState !== "error" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60">
             <p className="text-white text-sm animate-pulse">Warming up scanner…</p>
           </div>
@@ -268,7 +311,6 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
             </span>
             <span>{confidence > 0 ? `${Math.round(confidence)}%` : ""}</span>
           </div>
-          {/* Confidence bar */}
           <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-300 ${barColor}`}
@@ -281,8 +323,8 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
         </div>
       )}
 
-      {/* Preprocessed strip — what Tesseract reads */}
-      {previewUrl && (scanState === "scanning" || scanState === "paused") && (
+      {/* Preprocessed strip */}
+      {previewUrl && scanState !== "warming" && (
         <div className="flex flex-col gap-0.5">
           <p className="text-xs text-muted-foreground">Scanner view</p>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -297,29 +339,24 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
 
       {/* Controls */}
       <div className="flex gap-2">
-        {scanState === "scanning" ? (
+        {scanState === "scanning" && (
           <Button className="flex-1" variant="outline" onClick={pauseScanning}>
             ⏸ Pause
           </Button>
-        ) : scanState === "paused" ? (
+        )}
+        {scanState === "paused" && (
           <Button className="flex-1" onClick={resumeScanning}>
-            ▶ Resume Scanning
+            ▶ Resume
           </Button>
-        ) : scanState === "found" ? (
-          <Button className="flex-1" onClick={resumeScanning}>
-            Scan Next Card
+        )}
+        {scanState === "found" && (
+          <Button className="flex-1" variant="outline" onClick={resumeScanning}>
+            Scan next card
           </Button>
-        ) : null}
-        <Button size="default" variant="outline" onClick={flipCamera} title="Flip camera">
+        )}
+        <Button variant="outline" onClick={flipCamera} title="Flip camera">
           🔄
         </Button>
-      </div>
-
-      {/* Tips */}
-      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-xs text-zinc-400 space-y-0.5">
-        <p>• Hold the card still with the name inside the box</p>
-        <p>• Scans automatically every 1.5 s — no tapping needed</p>
-        <p>• Foil cards: hold at a slight angle to reduce glare</p>
       </div>
     </div>
   );

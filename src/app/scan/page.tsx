@@ -3,24 +3,26 @@ import { useState } from "react";
 import { CameraViewfinder } from "@/components/scanner/CameraViewfinder";
 import { SearchBar } from "@/components/collection/SearchBar";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import type { ScryfallCard } from "@/lib/scryfall/types";
 import Image from "next/image";
 import Link from "next/link";
 
 export default function ScanPage() {
-  const [foundCard, setFoundCard] = useState<ScryfallCard | null>(null);
-  const [added, setAdded] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [foil, setFoil] = useState(false);
+  const [foundCard, setFoundCard]   = useState<ScryfallCard | null>(null);
+  const [added, setAdded]           = useState(false);
+  const [adding, setAdding]         = useState(false);
+  const [foil, setFoil]             = useState(false);
+  // viewfinder resume callback — set by the CameraViewfinder
+  const [resumeFn, setResumeFn]     = useState<(() => void) | null>(null);
 
-  const handleCardFound = (card: ScryfallCard) => {
+  const handleCardFound = (card: ScryfallCard, resume: () => void) => {
     setFoundCard(card);
     setAdded(false);
     setFoil(false);
+    setResumeFn(() => resume);
   };
 
-  const handleAdd = async (qty: number = 1) => {
+  const handleAdd = async () => {
     if (!foundCard) return;
     setAdding(true);
     try {
@@ -31,7 +33,7 @@ export default function ScanPage() {
           scryfallId: foundCard.id,
           cardName: foundCard.name,
           setCode: foundCard.set.toUpperCase(),
-          quantity: qty,
+          quantity: 1,
           foil,
         }),
       });
@@ -41,9 +43,10 @@ export default function ScanPage() {
     }
   };
 
-  const handleReset = () => {
+  const handleDismiss = () => {
     setFoundCard(null);
     setAdded(false);
+    resumeFn?.();
   };
 
   const imageUri =
@@ -55,105 +58,116 @@ export default function ScanPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Scan Card</h1>
         <p className="text-muted-foreground text-sm">
-          Point your camera at a card, align the name, then tap Scan.
+          Hold a card so the name sits inside the yellow bar.
         </p>
       </div>
 
-      {!foundCard ? (
+      {/* Viewfinder — always mounted so the camera never restarts */}
+      <CameraViewfinder onCardFound={handleCardFound} />
+
+      {/* Manual search — always visible below the viewfinder */}
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center">
+          <span className="w-full border-t" />
+        </div>
+        <div className="relative flex justify-center">
+          <span className="bg-background px-2 text-xs text-muted-foreground">
+            or search manually
+          </span>
+        </div>
+      </div>
+      <SearchBar
+        onSelect={(card) => handleCardFound(card, () => {})}
+        placeholder="Type a card name…"
+      />
+
+      {/* ── Card confirmation — bottom sheet slides in when a card is found ── */}
+      {foundCard && (
         <>
-          <CameraViewfinder onCardFound={handleCardFound} />
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t" />
-            </div>
-            <div className="relative flex justify-center">
-              <span className="bg-background px-2 text-xs text-muted-foreground">
-                or search manually
-              </span>
-            </div>
-          </div>
-
-          <SearchBar
-            onSelect={handleCardFound}
-            placeholder="Type a card name…"
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={handleDismiss}
           />
-        </>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {imageUri && (
-            <div className="flex justify-center">
-              <Image
-                src={imageUri}
-                alt={foundCard.name}
-                width={488}
-                height={680}
-                className="rounded-2xl w-full max-w-xs shadow-2xl"
-                priority
-              />
+
+          {/* Sheet */}
+          <div className="fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl bg-background border-t p-4 pb-8 flex flex-col gap-3 max-w-lg mx-auto shadow-2xl">
+            {/* Drag handle */}
+            <div className="mx-auto h-1 w-10 rounded-full bg-muted" />
+
+            <div className="flex gap-3 items-start">
+              {imageUri && (
+                <Image
+                  src={imageUri}
+                  alt={foundCard.name}
+                  width={80}
+                  height={112}
+                  className="rounded-lg shrink-0 shadow"
+                />
+              )}
+              <div className="min-w-0 flex-1">
+                <h2 className="font-bold leading-tight">{foundCard.name}</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {foundCard.set_name}
+                </p>
+                <p className="text-xs text-muted-foreground">{foundCard.type_line}</p>
+                {foundCard.prices.eur && (
+                  <p className="text-sm font-semibold text-emerald-400 mt-1">
+                    €{parseFloat(foundCard.prices.eur).toFixed(2)}
+                    {foil && foundCard.prices.eur_foil
+                      ? ` · foil €${parseFloat(foundCard.prices.eur_foil).toFixed(2)}`
+                      : ""}
+                  </p>
+                )}
+              </div>
             </div>
-          )}
 
-          <div>
-            <h2 className="text-lg font-bold">{foundCard.name}</h2>
-            <p className="text-sm text-muted-foreground">
-              {foundCard.set_name} · {foundCard.type_line}
-            </p>
-            {foundCard.prices.eur && (
-              <p className="text-sm font-medium text-emerald-400 mt-1">
-                €{parseFloat(foundCard.prices.eur).toFixed(2)}
-                {foil && foundCard.prices.eur_foil
-                  ? ` · foil €${parseFloat(foundCard.prices.eur_foil).toFixed(2)}`
-                  : ""}
-              </p>
-            )}
-          </div>
+            {/* Foil toggle */}
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={foil}
+                onChange={(e) => setFoil(e.target.checked)}
+                className="rounded"
+              />
+              Foil ✨
+            </label>
 
-          {/* Foil toggle */}
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={foil}
-              onChange={(e) => setFoil(e.target.checked)}
-              className="rounded"
-            />
-            Foil ✨
-          </label>
-
-          {added ? (
-            <div className="flex flex-col gap-2">
-              <p className="text-center text-emerald-400 font-medium">
-                ✓ Added to collection!
-              </p>
+            {added ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-center text-emerald-400 font-medium text-sm">
+                  ✓ Added to collection!
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" onClick={() => { setAdded(false); handleAdd(); }}>
+                    + Another copy
+                  </Button>
+                  <Button className="flex-1" onClick={handleDismiss}>
+                    Scan next ▶
+                  </Button>
+                </div>
+                <Link href={`/card/${foundCard.id}`}>
+                  <Button variant="ghost" className="w-full text-xs text-muted-foreground">
+                    View card details ↗
+                  </Button>
+                </Link>
+              </div>
+            ) : (
               <div className="flex gap-2">
-                <Button className="flex-1" onClick={() => handleAdd(1)} variant="outline">
-                  Add another copy
+                <Button variant="outline" onClick={handleDismiss} className="shrink-0">
+                  ✕
                 </Button>
-                <Button className="flex-1" onClick={handleReset}>
-                  Scan next card
+                <Button
+                  className="flex-1"
+                  onClick={handleAdd}
+                  disabled={adding}
+                >
+                  {adding ? "Adding…" : "Add to Collection"}
                 </Button>
               </div>
-              <Link href={`/card/${foundCard.id}`}>
-                <Button variant="ghost" className="w-full text-sm">
-                  View card details
-                </Button>
-              </Link>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <Button
-                className="flex-1"
-                onClick={() => handleAdd(1)}
-                disabled={adding}
-              >
-                {adding ? "Adding…" : "Add to Collection"}
-              </Button>
-              <Button variant="outline" onClick={handleReset}>
-                Cancel
-              </Button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
