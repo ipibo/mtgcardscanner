@@ -1,7 +1,32 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx create-next-app@latest . --typescript --tailwind --app --src-dir --no-eslint --import-alias \"@/*\" --yes)"
+      "Bash(npx create-next-app@latest . --typescript --tailwind --app --src-dir --no-eslint --import-alias \"@/*\" --yes)",
+      "Bash(npm install *)",
+      "Bash(npx shadcn@latest init --defaults)",
+      "Bash(npx shadcn@latest add card input badge tabs badge separator)",
+      "Bash(mkdir -p /Users/iboibelings/Development/2026/mtgscanner/src/app/card/\\\\[scryfallId\\\\])",
+      "Bash(mkdir -p /Users/iboibelings/Development/2026/mtgscanner/src/app/api/collection/\\\\[id\\\\])",
+      "Bash(npx drizzle-kit *)",
+      "Bash(TURSO_DATABASE_URL=file:./local.db npx drizzle-kit migrate)",
+      "Bash(node -e ' *)",
+      "Bash(npm run *)",
+      "Bash(npm uninstall *)",
+      "Bash(curl -s http://localhost:3000/api/collection)",
+      "Bash(curl -s \"http://localhost:3000/api/scryfall/named?fuzzy=lightning+bolt\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d['name'], '-', d['set_name'], '- EUR:', d['prices']['eur']\\)\")",
+      "Bash(curl -s http://localhost:3001/api/collection)",
+      "Bash(curl -s \"http://localhost:3001/api/scryfall/named?fuzzy=lightning+bolt\")",
+      "Bash(curl -s -X POST http://localhost:3001/api/collection -H 'Content-Type: application/json' -d '{\"scryfallId\":\"test-123\",\"cardName\":\"Lightning Bolt\",\"setCode\":\"CLU\",\"quantity\":4,\"foil\":false}')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Added:', d\\)\")",
+      "Bash(curl -s \"http://localhost:3001/api/collection\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Collection:', len\\(d\\), 'cards'\\)\")",
+      "Bash(curl -s \"http://localhost:3001/api/collection?search=bolt\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Search results:', len\\(d\\), 'card\\(s\\):', [c['cardName'] for c in d]\\)\")",
+      "Bash(curl -s \"http://localhost:3001/api/scryfall/autocomplete?q=lightning\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Autocomplete:', d['data'][:3]\\)\")",
+      "Bash(curl -s -X POST http://localhost:3001/api/scryfall/collection -H 'Content-Type: application/json' -d '{\"identifiers\":[{\"name\":\"Lightning Bolt\"},{\"name\":\"Counterspell\"},{\"name\":\"Dark Ritual\"}]}')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(c['name'], '- EUR:', c['prices']['eur']\\) for c in d['data']]\")"
     ]
   }
 }
