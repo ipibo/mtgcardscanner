@@ -182,28 +182,16 @@ export default function ScanPage() {
                 </div>
               </div>
 
-              {/* Controls row */}
-              <div className="flex items-center gap-3">
-                {/* Foil toggle */}
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={foil}
-                    onChange={(e) => setFoil(e.target.checked)}
-                    className="rounded"
-                  />
-                  Foil ✨
-                </label>
-
-                <button
-                  className="ml-auto text-xs text-primary underline-offset-2 hover:underline"
-                  onClick={
-                    showPrints ? () => setShowPrints(false) : handleShowPrints
-                  }
-                >
-                  {showPrints ? "Hide sets" : "Change set"}
-                </button>
-              </div>
+              {/* Foil toggle */}
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={foil}
+                  onChange={(e) => setFoil(e.target.checked)}
+                  className="rounded"
+                />
+                Foil ✨
+              </label>
             </div>
 
             {/* Scrollable printings list — min-h-0 is required for overflow-y-auto to work in a flex column */}
@@ -264,55 +252,36 @@ export default function ScanPage() {
               </div>
             )}
 
-            {/* Fixed footer — shrink-0 so it always stays visible */}
-            <div className="shrink-0 p-4 pt-3 border-t flex flex-col gap-2">
-              {added ? (
-                <>
-                  <p className="text-center text-emerald-400 font-medium text-sm">
-                    ✓ Added to collection!
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      className="flex-1"
-                      onClick={() => {
-                        setAdded(false)
-                        handleAdd()
-                      }}
-                    >
-                      + Another copy
-                    </Button>
-                    <Button className="flex-1" onClick={handleDismiss}>
-                      Scan next ▶
-                    </Button>
-                  </div>
-                  <Link href={`/card/${card.id}`}>
-                    <Button
-                      variant="ghost"
-                      className="w-full text-xs text-muted-foreground"
-                    >
-                      View card details ↗
-                    </Button>
-                  </Link>
-                </>
-              ) : (
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleDismiss}
-                    className="shrink-0"
-                  >
-                    ✕
-                  </Button>
-                  <Button
-                    className="flex-1"
-                    onClick={handleAdd}
-                    disabled={adding}
-                  >
-                    {adding ? "Adding…" : "Add to Collection"}
-                  </Button>
-                </div>
-              )}
+            {/* Fixed footer */}
+            <div className="shrink-0 p-4 pt-3 border-t pb-[calc(env(safe-area-inset-bottom)+5rem)] flex flex-col gap-3">
+              <Button
+                className="w-full h-12 text-base font-semibold"
+                onClick={added ? handleDismiss : handleAdd}
+                disabled={adding}
+              >
+                {adding
+                  ? "Adding…"
+                  : added
+                    ? "✓ Toegevoegd! Volgende kaart"
+                    : "Voeg toe aan collectie"}
+              </Button>
+
+              <div className="flex items-center justify-between">
+                <button
+                  className="text-sm text-primary underline-offset-2 hover:underline"
+                  onClick={
+                    showPrints ? () => setShowPrints(false) : handleShowPrints
+                  }
+                >
+                  {showPrints ? "Verberg sets" : "Wijzig set"}
+                </button>
+                <Link
+                  href={`/card/${card.id}`}
+                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  Kaartdetails ↗
+                </Link>
+              </div>
             </div>
           </div>
         </>
