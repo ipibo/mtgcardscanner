@@ -6,6 +6,6 @@
  */
 export const CROP = {
   marginX: 0.02, // 2% clipped from each side
-  top: 0.005, // start 0.5% from the top
+  top: 0.105, // start ~10.5% from the top
   height: 0.18, // wider scan band to capture name even if card isn't perfectly aligned
 } as const
