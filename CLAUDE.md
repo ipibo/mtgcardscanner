@@ -9,15 +9,15 @@ Personal Magic: The Gathering card collection manager. Scan cards with your phon
 
 ## Tech Stack
 
-| Layer | Choice |
-|---|---|
-| Framework | Next.js 16 (Turbopack), TypeScript, React 19 |
-| Styling | Tailwind CSS 4, shadcn/ui |
-| Database | Turso (libSQL/SQLite) + Drizzle ORM |
-| Card data & prices | Scryfall API (EUR prices via Cardmarket partnership) |
-| OCR | Tesseract.js v6 (client-side, WASM) |
-| PWA | Custom service worker (`public/sw.js`) + `app/manifest.ts` |
-| Hosting | Vercel (app) + Turso EU West (DB) |
+| Layer              | Choice                                                     |
+| ------------------ | ---------------------------------------------------------- |
+| Framework          | Next.js 16 (Turbopack), TypeScript, React 19               |
+| Styling            | Tailwind CSS 4, shadcn/ui                                  |
+| Database           | Turso (libSQL/SQLite) + Drizzle ORM                        |
+| Card data & prices | Scryfall API (EUR prices via Cardmarket partnership)       |
+| OCR                | Tesseract.js v6 (client-side, WASM)                        |
+| PWA                | Custom service worker (`public/sw.js`) + `app/manifest.ts` |
+| Hosting            | Vercel (app) + Turso EU West (DB)                          |
 
 ---
 
@@ -97,7 +97,7 @@ Run migrations: `npx drizzle-kit migrate`
 
 - Camera opens on mount, Tesseract warms up in parallel
 - OCR runs every 1.5 s while scanning
-- Auto-confirms at **≥ 80% confidence** → lookup → bottom sheet slides up
+- Auto-confirms at **≥ 65% confidence** → lookup → bottom sheet slides up
 - Bottom sheet: card image, set name, rarity dot, EUR price, foil toggle, **"Change set"** picker
 - Change set: fetches all printings via `!"Card Name"&unique=prints`, scrollable list with EUR prices per printing
 - Camera stays live throughout — no restart between cards
@@ -107,11 +107,13 @@ Run migrations: `npx drizzle-kit migrate`
 ## Possible Next Steps
 
 ### OCR / Scanning
+
 - **Scan the set symbol area** — set code is printed in text at the bottom of the card (e.g. `M21 · EN · 123 · R`); a second OCR pass there could auto-select the correct printing
 - **Scan speed** — reduce interval from 1.5 s to ~1 s; or use confidence smoothing across frames (average 3 consecutive reads) to reduce false positives on partial reads
 - **Vibration on success** — `navigator.vibrate(80)` on confirmed scan for tactile feedback
 
 ### Collection
+
 - **Filter by set / colour / type** in the collection view
 - **Card condition** — NM / LP / MP / HP / DMG per card
 - **Multiple collections** — separate binders, trade binder vs. playing copies
@@ -120,18 +122,22 @@ Run migrations: `npx drizzle-kit migrate`
 - **Total collection value** — sum of `quantity × eur` for all cards, shown on dashboard
 
 ### Prices
+
 - **Price history** — store Scryfall price snapshots daily in Turso, plot with a chart library
 - **Price alerts** — notify when a card exceeds a threshold (Vercel Cron + push notifications)
 
 ### Decklist
+
 - **Moxfield / Archidekt URL import** — fetch decklist from a URL instead of paste
 - **Save decklists** — store imported decklists in DB, re-check later as collection grows
 - **Missing card quick-add** — tap a missing card in the import results to scan/add it
 
 ### Auth / Multi-user
+
 - `user_id` column already exists on `collections` — add NextAuth.js (Google/GitHub OAuth) when needed
 - Each user gets their own collection with no code changes to the query layer
 
 ### PWA / Mobile
+
 - **Splash screens** — add iOS splash screen meta tags for a polished install experience
 - **Offline collection browse** — cache collection API responses in the service worker
