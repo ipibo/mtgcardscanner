@@ -8,7 +8,7 @@ import type { ScryfallCard } from "@/lib/scryfall/types";
 
 export default function CollectionPage() {
   const [search, setSearch] = useState("");
-  const { cards, loading, error, addCard, updateQuantity } = useCollection(search);
+  const { cards, loading, error, addCard, updateQuantity, removeCard } = useCollection(search);
 
   const handleAddCard = async (card: ScryfallCard) => {
     await addCard({
@@ -64,7 +64,7 @@ export default function CollectionPage() {
       {!loading && cards.length > 0 && (
         <div className="rounded-xl border bg-card px-4">
           {cards.map((card) => (
-            <CardRow key={card.id} card={card} onUpdate={updateQuantity} />
+            <CardRow key={card.id} card={card} onUpdate={updateQuantity} onRemove={removeCard} />
           ))}
         </div>
       )}
