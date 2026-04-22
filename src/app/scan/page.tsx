@@ -78,6 +78,13 @@ export default function ScanPage() {
         }),
       })
       setAdded(true)
+      // Auto-dismiss and resume scanning immediately
+      setFoundCard(null)
+      setSelectedCard(null)
+      setAdded(false)
+      setShowPrints(false)
+      setPrintings([])
+      resumeFn?.()
     } finally {
       setAdding(false)
     }
