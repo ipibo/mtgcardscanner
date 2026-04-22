@@ -147,29 +147,35 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     setScanState("scanning")
   }, [])
 
-  const confirmCurrentScan = useCallback(async () => {
-    if (isConfirming) return
-    const candidate = cleanOcrText(liveText)
-    if (candidate.length < 2) return
+  const doLookup = useCallback(
+    async (candidate: string) => {
+      if (isConfirming) return
+      if (candidate.length < 2) return
 
-    scanningRef.current = false
-    setIsConfirming(true)
-    setScanState("found")
+      scanningRef.current = false
+      setIsConfirming(true)
+      setScanState("found")
 
-    try {
-      const card = await lookupCard(candidate)
-      if (card) {
-        onCardFound(card, resumeScanning)
-        return
+      try {
+        const card = await lookupCard(candidate)
+        if (card) {
+          onCardFound(card, resumeScanning)
+          return
+        }
+
+        setNoMatchHint(true)
+        scanningRef.current = true
+        setScanState("scanning")
+      } finally {
+        setIsConfirming(false)
       }
+    },
+    [isConfirming, onCardFound, resumeScanning],
+  )
 
-      setNoMatchHint(true)
-      scanningRef.current = true
-      setScanState("scanning")
-    } finally {
-      setIsConfirming(false)
-    }
-  }, [isConfirming, liveText, onCardFound, resumeScanning])
+  const confirmCurrentScan = useCallback(async () => {
+    await doLookup(cleanOcrText(liveText))
+  }, [doLookup, liveText])
 
   useEffect(() => {
     if (!noMatchHint) return
@@ -194,10 +200,14 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
       const cleaned = cleanOcrText(text)
       setLiveText(cleaned)
       setConfidence(conf)
+
+      if (conf >= CONFIDENCE_THRESHOLD && cleaned.length >= 2) {
+        await doLookup(cleaned)
+      }
     } finally {
       busyRef.current = false
     }
-  }, [onCardFound, resumeScanning])
+  }, [doLookup])
 
   useEffect(() => {
     if (scanState !== "scanning") return
