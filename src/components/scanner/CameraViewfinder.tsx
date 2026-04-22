@@ -12,8 +12,8 @@ interface CameraViewfinderProps {
 
 type ScanState = "warming" | "scanning" | "found" | "paused";
 
-const CONFIDENCE_THRESHOLD = 80;
-const SCAN_INTERVAL_MS     = 1500;
+const CONFIDENCE_THRESHOLD = 30;
+const SCAN_INTERVAL_MS     = 750;
 
 // ── Lookup helpers ────────────────────────────────────────────────────────────
 
