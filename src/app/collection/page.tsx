@@ -1,22 +1,23 @@
-"use client";
-import { useState } from "react";
-import { Input } from "@/components/ui/input";
-import { CardRow } from "@/components/collection/CardRow";
-import { SearchBar } from "@/components/collection/SearchBar";
-import { useCollection } from "@/hooks/useCollection";
-import type { ScryfallCard } from "@/lib/scryfall/types";
+"use client"
+import { useState } from "react"
+import { Input } from "@/components/ui/input"
+import { CardRow } from "@/components/collection/CardRow"
+import { SearchBar } from "@/components/collection/SearchBar"
+import { useCollection } from "@/hooks/useCollection"
+import type { ScryfallCard } from "@/lib/scryfall/types"
 
 export default function CollectionPage() {
-  const [search, setSearch] = useState("");
-  const { cards, loading, error, addCard, updateQuantity, removeCard } = useCollection(search);
+  const [search, setSearch] = useState("")
+  const { cards, loading, error, addCard, updateQuantity, removeCard } =
+    useCollection(search)
 
   const handleAddCard = async (card: ScryfallCard) => {
     await addCard({
       scryfallId: card.id,
       cardName: card.name,
       setCode: card.set.toUpperCase(),
-    });
-  };
+    })
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -64,10 +65,15 @@ export default function CollectionPage() {
       {!loading && cards.length > 0 && (
         <div className="rounded-xl border bg-card px-4">
           {cards.map((card) => (
-            <CardRow key={card.id} card={card} onUpdate={updateQuantity} onRemove={removeCard} />
+            <CardRow
+              key={card.id}
+              card={card}
+              onUpdate={updateQuantity}
+              onRemove={removeCard}
+            />
           ))}
         </div>
       )}
     </div>
-  );
+  )
 }
