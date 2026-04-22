@@ -4,18 +4,18 @@ import type {
   ScryfallCollectionIdentifier,
   ScryfallCollectionResponse,
   ScryfallList,
-} from "./types";
+} from "./types"
 
-const SCRYFALL_BASE = "https://api.scryfall.com";
+const SCRYFALL_BASE = "https://api.scryfall.com"
 
 // Simple rate limiter: enforce 100ms between requests
-let lastRequest = 0;
+let lastRequest = 0
 async function rateLimited<T>(fn: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  const wait = Math.max(0, 100 - (now - lastRequest));
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-  lastRequest = Date.now();
-  return fn();
+  const now = Date.now()
+  const wait = Math.max(0, 100 - (now - lastRequest))
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+  lastRequest = Date.now()
+  return fn()
 }
 
 async function scryfallFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -28,29 +28,29 @@ async function scryfallFetch<T>(path: string, init?: RequestInit): Promise<T> {
         ...init?.headers,
       },
       next: { revalidate: 3600 }, // Cache for 1 hour in Next.js
-    });
+    })
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ details: res.statusText }));
+      const err = await res.json().catch(() => ({ details: res.statusText }))
       throw new ScryfallApiError(
         err.details ?? res.statusText,
         res.status,
-        err.code ?? "unknown"
-      );
+        err.code ?? "unknown",
+      )
     }
 
-    return res.json() as Promise<T>;
-  });
+    return res.json() as Promise<T>
+  })
 }
 
 export class ScryfallApiError extends Error {
   constructor(
     message: string,
     public status: number,
-    public code: string
+    public code: string,
   ) {
-    super(message);
-    this.name = "ScryfallApiError";
+    super(message)
+    this.name = "ScryfallApiError"
   }
 }
 
@@ -58,50 +58,56 @@ export const scryfall = {
   /** Fuzzy card name lookup — forgiving of typos */
   namedFuzzy(name: string): Promise<ScryfallCard> {
     return scryfallFetch<ScryfallCard>(
-      `/cards/named?fuzzy=${encodeURIComponent(name)}`
-    );
+      `/cards/named?fuzzy=${encodeURIComponent(name)}`,
+    )
   },
 
   /** Exact card name lookup */
   namedExact(name: string): Promise<ScryfallCard> {
     return scryfallFetch<ScryfallCard>(
-      `/cards/named?exact=${encodeURIComponent(name)}`
-    );
+      `/cards/named?exact=${encodeURIComponent(name)}`,
+    )
   },
 
   /** Search-as-you-type autocomplete */
   autocomplete(q: string): Promise<ScryfallAutocomplete> {
     return scryfallFetch<ScryfallAutocomplete>(
-      `/cards/autocomplete?q=${encodeURIComponent(q)}`
-    );
+      `/cards/autocomplete?q=${encodeURIComponent(q)}`,
+    )
   },
 
   /** Full card search with Scryfall syntax */
-  search(q: string, page = 1): Promise<ScryfallList<ScryfallCard>> {
-    return scryfallFetch<ScryfallList<ScryfallCard>>(
-      `/cards/search?q=${encodeURIComponent(q)}&page=${page}`
-    );
+  search(
+    q: string,
+    page = 1,
+    unique?: string,
+    order?: string,
+  ): Promise<ScryfallList<ScryfallCard>> {
+    let url = `/cards/search?q=${encodeURIComponent(q)}&page=${page}`
+    if (unique) url += `&unique=${encodeURIComponent(unique)}`
+    if (order) url += `&order=${encodeURIComponent(order)}`
+    return scryfallFetch<ScryfallList<ScryfallCard>>(url)
   },
 
   /** Get a card by Scryfall UUID */
   byId(id: string): Promise<ScryfallCard> {
-    return scryfallFetch<ScryfallCard>(`/cards/${id}`);
+    return scryfallFetch<ScryfallCard>(`/cards/${id}`)
   },
 
   /** Batch fetch up to 75 cards by identifiers */
   collection(
-    identifiers: ScryfallCollectionIdentifier[]
+    identifiers: ScryfallCollectionIdentifier[],
   ): Promise<ScryfallCollectionResponse> {
     return scryfallFetch<ScryfallCollectionResponse>("/cards/collection", {
       method: "POST",
       body: JSON.stringify({ identifiers }),
-    });
+    })
   },
-};
+}
 
 /** Chunk an array into groups of n */
 export function chunk<T>(arr: T[], n: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-  return out;
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
 }

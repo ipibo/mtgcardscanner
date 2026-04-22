@@ -47,8 +47,10 @@ export default function ScanPage() {
     setLoadingPrints(true)
     try {
       // !"Card Name" = exact name match, unique=prints = one result per printing
-      const q = `!"${foundCard.name}"&unique=prints&order=released`
-      const res = await fetch(`/api/scryfall/search?q=${encodeURIComponent(q)}`)
+      const q = encodeURIComponent(`!"${foundCard.name}"`)
+      const res = await fetch(
+        `/api/scryfall/search?q=${q}&unique=prints&order=released`,
+      )
       if (!res.ok) return
       const data = await res.json()
       setPrintings(data.data ?? [])
@@ -77,11 +79,9 @@ export default function ScanPage() {
           foil,
         }),
       })
-      setAdded(true)
-      // Auto-dismiss and resume scanning immediately
+      // Dismiss and resume scanning immediately
       setFoundCard(null)
       setSelectedCard(null)
-      setAdded(false)
       setShowPrints(false)
       setPrintings([])
       resumeFn?.()
@@ -263,14 +263,10 @@ export default function ScanPage() {
             <div className="shrink-0 p-4 pt-3 border-t pb-[calc(env(safe-area-inset-bottom)+5rem)] flex flex-col gap-3">
               <Button
                 className="w-full h-12 text-base font-semibold"
-                onClick={added ? handleDismiss : handleAdd}
+                onClick={handleAdd}
                 disabled={adding}
               >
-                {adding
-                  ? "Adding…"
-                  : added
-                    ? "✓ Toegevoegd! Volgende kaart"
-                    : "Voeg toe aan collectie"}
+                {adding ? "Toevoegen…" : "Voeg toe aan collectie"}
               </Button>
 
               <div className="flex items-center justify-between">
