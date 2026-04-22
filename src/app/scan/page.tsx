@@ -127,9 +127,9 @@ export default function ScanPage() {
         <>
           <div className="fixed inset-0 z-40 bg-black/50" onClick={handleDismiss} />
 
-          <div className="fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl bg-background border-t shadow-2xl max-w-lg mx-auto flex flex-col max-h-[85vh]">
-            {/* Fixed header */}
-            <div className="p-4 pb-0 flex flex-col gap-3">
+          <div className="fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl bg-background border-t shadow-2xl max-w-lg mx-auto flex flex-col" style={{ maxHeight: "85dvh" }}>
+            {/* Fixed header — shrink-0 so it never compresses */}
+            <div className="shrink-0 p-4 pb-0 flex flex-col gap-3">
               <div className="mx-auto h-1 w-10 rounded-full bg-muted shrink-0" />
 
               {/* Card summary */}
@@ -193,9 +193,9 @@ export default function ScanPage() {
               </div>
             </div>
 
-            {/* Scrollable printings list */}
+            {/* Scrollable printings list — min-h-0 is required for overflow-y-auto to work in a flex column */}
             {showPrints && (
-              <div className="overflow-y-auto flex-1 px-4 pb-2 mt-2 border-t">
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 mt-2 border-t">
                 {loadingPrints ? (
                   <p className="text-center text-sm text-muted-foreground py-4">
                     Loading printings…
@@ -244,8 +244,8 @@ export default function ScanPage() {
               </div>
             )}
 
-            {/* Fixed footer — action buttons */}
-            <div className="p-4 pt-3 border-t flex flex-col gap-2">
+            {/* Fixed footer — shrink-0 so it always stays visible */}
+            <div className="shrink-0 p-4 pt-3 border-t flex flex-col gap-2">
               {added ? (
                 <>
                   <p className="text-center text-emerald-400 font-medium text-sm">

@@ -7,8 +7,6 @@ import { CROP } from "@/lib/ocr/cropConstants";
 import type { ScryfallCard } from "@/lib/scryfall/types";
 
 interface CameraViewfinderProps {
-  /** Called when a card is identified with high confidence.
-   *  The second argument is a callback to resume scanning. */
   onCardFound: (card: ScryfallCard, resume: () => void) => void;
 }
 
@@ -17,107 +15,70 @@ type ScanState = "warming" | "scanning" | "found" | "paused";
 const CONFIDENCE_THRESHOLD = 80;
 const SCAN_INTERVAL_MS     = 1500;
 
-/**
- * Strip OCR noise from the start/end of a string and normalise whitespace.
- * Tesseract often prepends punctuation like ",," or "'" before the first
- * real character, and sometimes cuts the last word short.
- */
+// ── Lookup helpers ────────────────────────────────────────────────────────────
+
 function cleanOcrText(raw: string): string {
   return raw
-    .replace(/^[^a-zA-Z]+/, "")   // strip leading non-alpha (,, ' - etc.)
-    .replace(/[^a-zA-Z]+$/, "")   // strip trailing non-alpha
+    .replace(/^[^a-zA-Z]+/, "")  // strip leading garbage (,, ' etc.)
+    .replace(/[^a-zA-Z]+$/, "")  // strip trailing garbage
     .replace(/\s+/g, " ")
     .trim();
 }
 
+/** Try Scryfall autocomplete for a query, return the top match or null. */
+async function tryAutocomplete(q: string): Promise<ScryfallCard | null> {
+  if (q.length < 2) return null;
+  const res = await fetch(`/api/scryfall/autocomplete?q=${encodeURIComponent(q)}`);
+  if (!res.ok) return null;
+  const { data }: { data: string[] } = await res.json();
+  if (!data?.length) return null;
+  const exact = await fetch(`/api/scryfall/named?exact=${encodeURIComponent(data[0])}`);
+  return exact.ok ? exact.json() : null;
+}
+
 /**
- * Look up a card by OCR text using two strategies:
- * 1. Scryfall fuzzy — handles typos well
- * 2. Scryfall autocomplete → exact — handles truncated words well
- *    e.g. "evolving wil" → autocomplete → "Evolving Wilds" → exact fetch
+ * Multi-strategy lookup — tries in order until something matches:
  *
- * Returns the card or null if neither strategy matched.
+ * 1. Fuzzy:              "evolving wil"   → Scryfall fuzzy (handles typos)
+ * 2. Autocomplete full:  "evolving wil"   → autocomplete → "Evolving Wilds"
+ * 3. No-space variant:   "evolvingwil"    → handles OCR that merges words
+ * 4. Per-word fallback:  "evolving", "wil" (longest first) → autocomplete
+ *    Catches cases where OCR only read one word of a multi-word name.
  */
 async function lookupCard(text: string): Promise<ScryfallCard | null> {
-  // Strategy 1: fuzzy lookup
-  const fuzzyRes = await fetch(
-    `/api/scryfall/named?fuzzy=${encodeURIComponent(text)}`
-  );
-  if (fuzzyRes.ok) return fuzzyRes.json();
+  // 1. Fuzzy
+  const fuzzy = await fetch(`/api/scryfall/named?fuzzy=${encodeURIComponent(text)}`);
+  if (fuzzy.ok) return fuzzy.json();
 
-  // Strategy 2: autocomplete → take first suggestion → exact lookup
-  const acRes = await fetch(
-    `/api/scryfall/autocomplete?q=${encodeURIComponent(text)}`
-  );
-  if (!acRes.ok) return null;
-  const { data }: { data: string[] } = await acRes.json();
-  if (!data || data.length === 0) return null;
+  // 2. Autocomplete on full text (best for truncated words like "wil" → "Wilds")
+  const fromFull = await tryAutocomplete(text);
+  if (fromFull) return fromFull;
 
-  const exactRes = await fetch(
-    `/api/scryfall/named?exact=${encodeURIComponent(data[0])}`
-  );
-  return exactRes.ok ? exactRes.json() : null;
-}
-
-/**
- * Map the crop rectangle from video-pixel space to CSS-pixel space,
- * accounting for object-cover scaling.
- *
- * With object-cover one axis fills the container exactly while the
- * other overflows and is clipped. On a typical phone (16:9 camera in
- * a 4:3 container) the video is wider than the container, so the
- * horizontal crop coordinates map to values outside [0, containerW].
- * We clamp to the container bounds — the guide is still accurate
- * vertically, and horizontally it signals "full width" which is
- * correct (the 5 % margin just trims the very edge of the frame).
- */
-function computeGuideBox(
-  containerW: number,
-  containerH: number,
-  videoW: number,
-  videoH: number,
-) {
-  if (!containerW || !containerH || !videoW || !videoH)
-    return { left: 0, top: 0, width: 0, height: 0 };
-
-  const videoAspect     = videoW / videoH;
-  const containerAspect = containerW / containerH;
-
-  let scale: number, offsetX = 0, offsetY = 0;
-  if (videoAspect > containerAspect) {
-    // Video wider → height fills container, sides overflow/clip
-    scale   = containerH / videoH;
-    offsetX = (videoW * scale - containerW) / 2;
-  } else {
-    // Video taller → width fills container, top/bottom overflow/clip
-    scale   = containerW / videoW;
-    offsetY = (videoH * scale - containerH) / 2;
+  // 3. No-space variant (handles OCR joining words: "LightningBolt")
+  const noSpace = text.replace(/\s+/g, "");
+  if (noSpace !== text) {
+    const fromNoSpace = await tryAutocomplete(noSpace);
+    if (fromNoSpace) return fromNoSpace;
   }
 
-  // Map crop rect to CSS pixels
-  let left   = videoW * CROP.marginX              * scale - offsetX;
-  let top    = videoH * CROP.top                  * scale - offsetY;
-  let width  = videoW * (1 - CROP.marginX * 2)   * scale;
-  let height = videoH * CROP.height               * scale;
-
-  // Clamp horizontally — the visible camera frame is always inside the
-  // crop zone, so spanning the full container width is the right hint.
-  const right = left + width;
-  if (left < 0 || right > containerW) {
-    left  = 0;
-    width = containerW;
+  // 4. Per-word fallback — try each word, longest first
+  const words = text.split(/\s+/).filter((w) => w.length >= 3);
+  words.sort((a, b) => b.length - a.length);
+  for (const word of words) {
+    const fromWord = await tryAutocomplete(word);
+    if (fromWord) return fromWord;
   }
 
-  return { left, top, width, height };
+  return null;
 }
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
-  const videoRef     = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const { state: camState, startCamera, stopCamera, flipCamera } = useCamera(videoRef);
 
   const [scanState, setScanState]   = useState<ScanState>("warming");
-  const [guide, setGuide]           = useState({ left: 0, top: 0, width: 0, height: 0 });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [liveText, setLiveText]     = useState("");
   const [confidence, setConfidence] = useState(0);
@@ -125,31 +86,6 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
   const scanningRef = useRef(false);
   const busyRef     = useRef(false);
 
-  // ── Guide box ────────────────────────────────────────────────────────────
-  const recalcGuide = useCallback(() => {
-    const v = videoRef.current;
-    const c = containerRef.current;
-    if (!v || !c) return;
-    setGuide(computeGuideBox(c.offsetWidth, c.offsetHeight, v.videoWidth, v.videoHeight));
-  }, []);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.addEventListener("loadedmetadata", recalcGuide);
-    if (v.videoWidth) recalcGuide();
-    return () => v.removeEventListener("loadedmetadata", recalcGuide);
-  }, [recalcGuide]);
-
-  useEffect(() => {
-    const c = containerRef.current;
-    if (!c) return;
-    const ro = new ResizeObserver(recalcGuide);
-    ro.observe(c);
-    return () => ro.disconnect();
-  }, [recalcGuide]);
-
-  // ── Resume scanning (called by parent after user dismisses card sheet) ──
   const resumeScanning = useCallback(() => {
     setLiveText("");
     setConfidence(0);
@@ -157,12 +93,13 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     setScanState("scanning");
   }, []);
 
-  // ── OCR loop ─────────────────────────────────────────────────────────────
+  // ── OCR loop ──────────────────────────────────────────────────────────────
   const runOnce = useCallback(async () => {
     if (busyRef.current || !videoRef.current || !scanningRef.current) return;
     busyRef.current = true;
     try {
       const dataUrl = captureAndCrop(videoRef.current);
+      if (!dataUrl) return;
       setPreviewUrl(dataUrl);
 
       const { recognizeText } = await import("@/lib/ocr/worker");
@@ -182,7 +119,6 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
         if (card) {
           onCardFound(card, resumeScanning);
         } else {
-          // Both strategies failed — resume scanning
           scanningRef.current = true;
           setScanState("scanning");
         }
@@ -202,16 +138,13 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     return () => clearInterval(id);
   }, [scanState, runOnce]);
 
-  // ── Camera startup ───────────────────────────────────────────────────────
+  // ── Camera startup ────────────────────────────────────────────────────────
   useEffect(() => {
     import("@/lib/ocr/worker")
       .then(({ getOcrWorker }) => getOcrWorker())
       .then(() => { if (camState === "active") setScanState("scanning"); });
     startCamera();
-    return () => {
-      scanningRef.current = false;
-      stopCamera();
-    };
+    return () => { scanningRef.current = false; stopCamera(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -226,15 +159,19 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
     : confidence >= 50                 ? "bg-yellow-500"
     :                                    "bg-red-500";
 
-  const guideVisible = guide.width > 0;
+  // Guide box is pure CSS percentages — always matches captureAndCrop
+  // because that function now crops the same visible frame the user sees.
+  const guideStyle = {
+    top:    `${CROP.top    * 100}%`,
+    height: `${CROP.height * 100}%`,
+    left:   `${CROP.marginX * 100}%`,
+    right:  `${CROP.marginX * 100}%`,
+  } as const;
 
   return (
     <div className="flex flex-col gap-3">
       {/* Viewfinder */}
-      <div
-        ref={containerRef}
-        className="relative w-full overflow-hidden rounded-xl bg-black aspect-[4/3]"
-      >
+      <div className="relative w-full overflow-hidden rounded-xl bg-black aspect-[4/3]">
         <video
           ref={videoRef}
           autoPlay
@@ -243,32 +180,27 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
           className="h-full w-full object-cover"
         />
 
-        {/* Guide box — position computed from real video dimensions */}
-        {guideVisible && (
+        {/* Guide box — pure CSS, guaranteed to match the crop area */}
+        <div className="pointer-events-none absolute" style={guideStyle}>
           <div
-            className="pointer-events-none absolute"
-            style={{ left: guide.left, top: guide.top, width: guide.width, height: guide.height }}
+            className={`absolute inset-0 rounded border-2 transition-colors duration-300 ${
+              scanState === "found"   ? "border-emerald-400 bg-emerald-400/20"
+              : scanState === "paused" ? "border-zinc-500/60"
+              :                          "border-yellow-400/90 bg-yellow-400/10"
+            }`}
+          />
+          <p
+            className="absolute bottom-1 left-0 right-0 text-center font-semibold drop-shadow-md"
+            style={{
+              fontSize: 10,
+              color: scanState === "found"  ? "#34d399"
+                   : scanState === "paused" ? "#a1a1aa"
+                   :                         "#fde68a",
+            }}
           >
-            <div
-              className={`absolute inset-0 rounded border-2 transition-colors duration-300 ${
-                scanState === "found"  ? "border-emerald-400 bg-emerald-400/20"
-                : scanState === "paused" ? "border-zinc-500/60"
-                :                          "border-yellow-400/90 bg-yellow-400/10"
-              }`}
-            />
-            {/* Label — inside the box at the bottom so it can't overflow the container */}
-            <p
-              className="absolute bottom-1 left-0 right-0 text-center font-semibold drop-shadow-md text-[10px]"
-              style={{
-                color: scanState === "found"   ? "#34d399"
-                     : scanState === "paused"  ? "#a1a1aa"
-                     :                          "#fde68a",
-              }}
-            >
-              {scanState === "paused" ? "Paused" : "Align card name here"}
-            </p>
-          </div>
-        )}
+            {scanState === "paused" ? "Paused" : "Card name here"}
+          </p>
+        </div>
 
         {/* Status badge */}
         <div className="absolute top-2 right-2">
@@ -290,7 +222,7 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
             Camera permission denied. Allow camera access in your browser settings, then reload.
           </div>
         )}
-        {(camState === "error" || camState === "idle") && scanState === "warming" && (
+        {camState === "error" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-4 text-center text-sm text-white">
             Camera unavailable. Use the search below instead.
           </div>
@@ -302,7 +234,7 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
         )}
       </div>
 
-      {/* Live OCR feedback */}
+      {/* Live confidence feedback */}
       {(scanState === "scanning" || scanState === "paused") && (
         <div className="flex flex-col gap-1">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -323,7 +255,7 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
         </div>
       )}
 
-      {/* Preprocessed strip */}
+      {/* What Tesseract sees */}
       {previewUrl && scanState !== "warming" && (
         <div className="flex flex-col gap-0.5">
           <p className="text-xs text-muted-foreground">Scanner view</p>
@@ -340,23 +272,15 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
       {/* Controls */}
       <div className="flex gap-2">
         {scanState === "scanning" && (
-          <Button className="flex-1" variant="outline" onClick={pauseScanning}>
-            ⏸ Pause
-          </Button>
+          <Button className="flex-1" variant="outline" onClick={pauseScanning}>⏸ Pause</Button>
         )}
         {scanState === "paused" && (
-          <Button className="flex-1" onClick={resumeScanning}>
-            ▶ Resume
-          </Button>
+          <Button className="flex-1" onClick={resumeScanning}>▶ Resume</Button>
         )}
         {scanState === "found" && (
-          <Button className="flex-1" variant="outline" onClick={resumeScanning}>
-            Scan next card
-          </Button>
+          <Button className="flex-1" variant="outline" onClick={resumeScanning}>Scan next card</Button>
         )}
-        <Button variant="outline" onClick={flipCamera} title="Flip camera">
-          🔄
-        </Button>
+        <Button variant="outline" onClick={flipCamera} title="Flip camera">🔄</Button>
       </div>
     </div>
   );
