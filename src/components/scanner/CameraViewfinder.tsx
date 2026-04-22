@@ -12,7 +12,7 @@ interface CameraViewfinderProps {
 
 type ScanState = "warming" | "scanning" | "found" | "paused"
 
-const CONFIDENCE_THRESHOLD = 50
+const CONFIDENCE_THRESHOLD_DEFAULT = 65
 const SCAN_INTERVAL_MS = 1500
 
 // ── Lookup helpers ────────────────────────────────────────────────────────────
@@ -134,6 +134,7 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
   const [confidence, setConfidence] = useState(0)
   const [isConfirming, setIsConfirming] = useState(false)
   const [noMatchHint, setNoMatchHint] = useState(false)
+  const [threshold, setThreshold] = useState(CONFIDENCE_THRESHOLD_DEFAULT)
 
   const scanningRef = useRef(false)
   const busyRef = useRef(false)
@@ -201,13 +202,13 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
       setLiveText(cleaned)
       setConfidence(conf)
 
-      if (conf >= CONFIDENCE_THRESHOLD && cleaned.length >= 2) {
+      if (conf >= threshold && cleaned.length >= 2) {
         await doLookup(cleaned)
       }
     } finally {
       busyRef.current = false
     }
-  }, [doLookup])
+  }, [doLookup, threshold])
 
   useEffect(() => {
     if (scanState !== "scanning") return
@@ -245,9 +246,9 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
   }
 
   const barColor =
-    confidence >= CONFIDENCE_THRESHOLD
+    confidence >= threshold
       ? "bg-emerald-500"
-      : confidence >= 50
+      : confidence >= threshold * 0.75
         ? "bg-yellow-500"
         : "bg-red-500"
 
@@ -345,15 +346,31 @@ export function CameraViewfinder({ onCardFound }: CameraViewfinderProps) {
             </span>
             <span>{confidence > 0 ? `${Math.round(confidence)}%` : ""}</span>
           </div>
-          <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+          <div className="relative h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-300 ${barColor}`}
               style={{ width: `${Math.min(confidence, 100)}%` }}
             />
+            {/* threshold marker */}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-white/50"
+              style={{ left: `${threshold}%` }}
+            />
           </div>
-          <p className="text-xs text-muted-foreground text-right">
-            Tap confirm when the card name looks right.
-          </p>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground whitespace-nowrap">
+              Auto-confirm: {threshold}%
+            </label>
+            <input
+              type="range"
+              min={30}
+              max={95}
+              step={5}
+              value={threshold}
+              onChange={(e) => setThreshold(Number(e.target.value))}
+              className="flex-1 accent-emerald-500"
+            />
+          </div>
           {noMatchHint && (
             <p className="text-xs text-amber-400 text-right">
               No match found. Try a steadier frame and confirm again.
